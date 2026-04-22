@@ -13,10 +13,14 @@ MoziOkoshi は、`faster-whisper` をエンジンとして使用した、Windows
 - **言語**: Python 3.10
 - **GUI フレームワーク**: PySide6 (Qt for Python)
 - **AI エンジン**: faster-whisper (ctranslate2 4.4.0)
+  - リポジトリ: [https://github.com/SYSTRAN/faster-whisper](https://github.com/SYSTRAN/faster-whisper)
 - **数値計算/AI 基盤**:
   - torch (PyTorch) 2.5.1+cu121
   - torchaudio 2.5.1+cu121
-- **依存ツール**: FFmpeg (音声抽出・変換用)
+- **依存ツール**: 
+  - **FFmpeg** (音声抽出・変換用)
+    - 公式サイト: [https://ffmpeg.org/](https://ffmpeg.org/)
+    - 配布元 (BtbN): [https://github.com/BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds)
 
 ## 4. 配布形態
 - **ポータブル版 (ZIP)**:
@@ -31,6 +35,7 @@ MoziOkoshi は、`faster-whisper` をエンジンとして使用した、Windows
 初回起動時に以下のコンポーネントが不足している場合、自動的にダウンロードが行われます：
 - **FFmpeg**: `https://github.com/BtbN/FFmpeg-Builds` より最新版を取得。
 - **Whisper モデル**: `large-v3-turbo` モデルを Hugging Face より取得。
+  - モデル配布元: [https://huggingface.co/Systran/faster-whisper-large-v3-turbo](https://huggingface.co/Systran/faster-whisper-large-v3-turbo)
 ※ これらを除外することで、配布時のパッケージサイズを最小限に抑えています。
 
 ## 6. 処理フロー

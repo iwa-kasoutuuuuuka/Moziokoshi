@@ -1,5 +1,9 @@
 # MoziOkoshi
 
+> [!IMPORTANT]
+> **実行ファイルの配布について**  
+> 本アプリケーションは AI エンジン（PyTorch/CUDA）を同梱しているため、ビルド後のファイル容量が非常に巨大（数 GB）になります。GitHub のリポジトリ制限により実行ファイルを直接公開することが難しいため、必要に応じて各自でビルドしていただくか、外部ストレージ等での配布を想定しています。
+
 ## 概要
 MoziOkoshi は、音声・動画ファイルを高速に文字起こしするデスクトップアプリケーションです。  
 - **言語**: 日本語（デフォルト） / 英語  
@@ -41,6 +45,17 @@ MoziOkoshi は、音声・動画ファイルを高速に文字起こしするデ
   - 大きな音声ファイルは分割処理によりメモリを節約しますが、処理時間は長くなる可能性があります。  
   - **配布用実行ファイル（ZIP版）の容量について**:  
     ZIPファイルが数GBと大きくなっているのは、AIエンジンの **PyTorch** および GPU高速化ライブラリの **CUDA** が同梱されているためです。これにより、Pythonのインストール不要でGPUによる高速な文字起こしが可能になっています。
+
+## 外部ソフトウェア・モデル
+本プロジェクトでは以下の外部ソフトウェアおよびモデルを使用しています。
+
+- **FFmpeg**: 音声の抽出・変換に使用
+  - 公式サイト: [https://ffmpeg.org/](https://ffmpeg.org/)
+  - 配布元 (BtbN): [https://github.com/BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds)
+- **faster-whisper**: 文字起こしエンジン
+  - リポジトリ: [https://github.com/SYSTRAN/faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+- **Whisper Model (large-v3-turbo)**: 学習済み AI モデル
+  - モデル配布元: [https://huggingface.co/Systran/faster-whisper-large-v3-turbo](https://huggingface.co/Systran/faster-whisper-large-v3-turbo)
 
 ## 開発環境
 - Python 3.10  
