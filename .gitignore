@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# Build and Dist
+build/
+dist/
+*.spec
+
+# Project specific
+ffmpeg/
+ffmpeg.zip
+models/
+verification_output/
+test_output/
+log.txt
+*.wav
+*.mp3
+*.mp4
+
+# IDEs
+.vscode/
+.idea/
