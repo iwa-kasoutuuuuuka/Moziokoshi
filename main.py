@@ -1,6 +1,7 @@
 import sys
 import os
 from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QIcon
 from ui.main_window import MainWindow
 from utils.logger import logger
 
@@ -21,6 +22,11 @@ def main():
             with open(qss_path, 'r', encoding='utf-8') as f:
                 app.setStyleSheet(f.read())
                 
+        # Set app icon
+        icon_path = os.path.join(app_dir, "app_icon.png")
+        if os.path.exists(icon_path):
+            app.setWindowIcon(QIcon(icon_path))
+            
         window = MainWindow()
         window.show()
         

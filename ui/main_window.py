@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QProgressBar, QLineEdit, QButtonGroup, QMessageBox
 )
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QIcon
 from core.transcriber import Transcriber, get_gpu_info
 from core.downloader import get_ffmpeg_path, get_app_dir
 from utils.logger import logger, gui_log_signal
@@ -99,6 +99,12 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("MoziOkoshi Pro - 音声・動画文字起こし")
         self.setMinimumSize(800, 600)
         self.setAcceptDrops(True)
+        
+        # Set window icon
+        app_dir = get_app_dir()
+        icon_path = os.path.join(app_dir, "app_icon.png")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
         
         self.files_to_process = []
         self.worker_thread = None

@@ -32,9 +32,10 @@ def build():
         "--noconfirm",
         "--windowed", # No console window
         "--name", "MoziOkoshi",
-        "--icon", "NONE", # Add icon path later if needed
+        "--icon", "app_icon.ico",
         "--add-data", f"{filler_dict};.",
-        "--add-data", f"ui/styles.qss;ui/",
+        "--add-data", "app_icon.png;.",
+        "--add-data", "ui/styles.qss;ui/",
         "--collect-data", "faster_whisper", # ensures whisper assets
         "--collect-data", "ctranslate2",
         "main.py"
