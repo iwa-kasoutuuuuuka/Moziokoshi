@@ -1,6 +1,6 @@
 import os
 import gc
-import torch
+# import torch  <-- Remove this to save ~2GB in build
 from faster_whisper import WhisperModel
 from core.audio_utils import get_audio_chunks, cleanup_chunks
 from core.text_processor import process_text
@@ -9,19 +9,23 @@ from utils.logger import logger
 def get_gpu_info():
     """
     Returns (use_gpu: bool, vram_gb: float, forced_medium: bool)
+    torch を使わずに、環境変数や ctranslate2 の挙動から推測または簡易チェックします。
     """
-    if not torch.cuda.is_available():
-        return False, 0.0, False
-        
+    # 簡易的に NVIDIA GPU があるかチェック (Windows)
     try:
-        # Get total VRAM of device 0 in GB
-        total_memory = torch.cuda.get_device_properties(0).total_memory
-        vram_gb = total_memory / (1024 ** 3)
-        forced_medium = vram_gb < 3.0
-        return True, vram_gb, forced_medium
-    except Exception as e:
-        logger.error(f"Error checking GPU VRAM: {e}")
-        return True, 4.0, False # Default to non-forced if we can't check
+        import subprocess
+        # nvidia-smi が実行できれば GPU ありと判断
+        res = subprocess.run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"], 
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if res.returncode == 0:
+            vram_mb = float(res.stdout.strip().split('\n')[0])
+            vram_gb = vram_mb / 1024.0
+            forced_medium = vram_gb < 3.0
+            return True, vram_gb, forced_medium
+    except Exception:
+        pass
+        
+    return False, 0.0, False
 
 def format_timestamp(seconds: float, separator: str = ","):
     """
@@ -81,13 +85,13 @@ class Transcriber:
         
         try:
             for i, chunk in enumerate(chunks):
-                chunk_path = chunk['path']
+                chunk_data = chunk['data']
                 time_offset = chunk['start_time']
                 
                 logger.info(f"Processing chunk {i+1}/{total_chunks}...")
                 
-                # Using faster-whisper
-                segments, info = self.model.transcribe(chunk_path, language=lang, beam_size=5)
+                # Using faster-whisper with in-memory NumPy array
+                segments, info = self.model.transcribe(chunk_data, language=lang, beam_size=5)
                 
                 for segment in segments:
                     # Apply text processing
@@ -105,8 +109,8 @@ class Transcriber:
                     
                 # Clean up memory
                 gc.collect()
-                if self.use_gpu:
-                    torch.cuda.empty_cache()
+                # if self.use_gpu:
+                #    torch.cuda.empty_cache()
                     
             # Export results
             self._export_results(file_path, output_dir, formats, lang, all_segments)
@@ -116,8 +120,8 @@ class Transcriber:
         finally:
             cleanup_chunks(chunks)
             gc.collect()
-            if self.use_gpu:
-                torch.cuda.empty_cache()
+            # if self.use_gpu:
+            #    torch.cuda.empty_cache()
 
     def _export_results(self, file_path, output_dir, formats, lang, segments):
         base_name = os.path.splitext(os.path.basename(file_path))[0]

@@ -13,26 +13,50 @@ def load_filler_dict(app_dir):
     return fillers
 
 def remove_fillers(text, fillers):
-    if not fillers:
+    if not fillers or not text:
         return text
     
-    # Sort fillers by length descending to match longer phrases first
-    fillers.sort(key=len, reverse=True)
-    
-    # Simple regex to remove filler words. Matches optional surrounding spaces.
-    pattern = r'\s*(' + '|'.join(map(re.escape, fillers)) + r')\s*'
-    
-    # Replace with single space if there were spaces, or nothing
-    # Actually, we should be careful not to remove parts of words.
-    # Japanese doesn't usually use spaces, so simple replacement is mostly safe.
-    result = text
+    # 1. Build Trie (トライ木の構築)
+    # C++等の低レイヤ言語でも一般的に使われる高速なデータ構造です。
+    trie = {}
     for filler in fillers:
-        # standard replace
-        result = result.replace(filler, '')
+        node = trie
+        for char in filler:
+            node = node.setdefault(char, {})
+        node['#'] = True # 終端フラグ
     
+    # 2. Match and Remove (一回の走査でマッチング)
+    # 文字列を一度だけ走査するため、辞書サイズが大きくても O(N) で動作します。
+    result = []
+    i = 0
+    n = len(text)
+    
+    while i < n:
+        # トライ木を辿って最長マッチを探す
+        match_len = 0
+        node = trie
+        curr_i = i
+        
+        # 最長一致を選択（例：「えー」と「えーと」がある場合「えーと」を消す）
+        temp_match_len = 0
+        while curr_i < n and text[curr_i] in node:
+            node = node[text[curr_i]]
+            curr_i += 1
+            if '#' in node:
+                temp_match_len = curr_i - i
+        
+        if temp_match_len > 0:
+            # フィラーが見つかったのでスキップ
+            i += temp_match_len
+        else:
+            # フィラーではないので文字を保持
+            result.append(text[i])
+            i += 1
+            
     # Clean up double spaces if any
-    result = re.sub(r' +', ' ', result).strip()
-    return result
+    res_str = "".join(result)
+    res_str = re.sub(r' +', ' ', res_str).strip()
+    return res_str
 
 def add_punctuation(text):
     if not text:

@@ -9,10 +9,13 @@ from PySide6.QtGui import QDragEnterEvent, QDropEvent, QIcon
 from core.transcriber import Transcriber, get_gpu_info
 from core.downloader import get_ffmpeg_path, get_app_dir
 from utils.logger import logger, gui_log_signal
+from utils.settings import settings
 
 class TranscriptionThread(QThread):
     progress_signal = Signal(int)
+    total_progress_signal = Signal(int)
     log_signal = Signal(str)
+    file_finished_signal = Signal(int, int) # completed, total
     finished_signal = Signal(bool, str) # success, message
     
     def __init__(self, files, output_dir, mode, formats, options):
@@ -23,6 +26,7 @@ class TranscriptionThread(QThread):
         self.formats = formats
         self.options = options
         self.is_running = True
+        self.transcriber = None
 
     def run(self):
         try:
@@ -31,22 +35,22 @@ class TranscriptionThread(QThread):
             models_dir = os.path.join(app_dir, 'models')
             
             self.log_signal.emit("Transcriber initialization...")
-            transcriber = Transcriber(self.mode, models_dir, app_dir, ffmpeg_path)
+            self.transcriber = Transcriber(self.mode, models_dir, app_dir, ffmpeg_path)
             
             total_files = len(self.files)
             for idx, file_path in enumerate(self.files):
                 if not self.is_running:
-                    self.log_signal.emit("Process cancelled.")
+                    self.log_signal.emit("Batch process cancelled.")
                     break
                     
                 self.log_signal.emit(f"Processing ({idx+1}/{total_files}): {os.path.basename(file_path)}")
-                self.progress_signal.emit(0) # Reset progress for new file
+                self.progress_signal.emit(0)
                 
                 def progress_cb(pct):
                     if self.is_running:
                         self.progress_signal.emit(pct)
-                        
-                success = transcriber.transcribe_file(
+                
+                success = self.transcriber.transcribe_file(
                     file_path=file_path,
                     output_dir=self.output_dir,
                     formats=self.formats,
@@ -57,20 +61,24 @@ class TranscriptionThread(QThread):
                 )
                 
                 if success:
-                    self.progress_signal.emit(100)
                     self.log_signal.emit(f"Completed: {os.path.basename(file_path)}")
                 else:
                     self.log_signal.emit(f"Failed: {os.path.basename(file_path)}")
+                
+                self.file_finished_signal.emit(idx + 1, total_files)
+                self.total_progress_signal.emit(int((idx + 1) / total_files * 100))
                     
             if self.is_running:
-                self.finished_signal.emit(True, "All files processed successfully.")
+                self.finished_signal.emit(True, "All files in queue processed.")
                 
         except Exception as e:
-            logger.error(f"Thread error: {e}", exc_info=True)
+            logger.error(f"Queue Thread error: {e}", exc_info=True)
             self.finished_signal.emit(False, str(e))
             
     def stop(self):
         self.is_running = False
+        # If we need more aggressive stop, we could try to signal the transcriber
+        # but for now, we wait for current segment/chunk to finish.
 
 class DropLineEdit(QLineEdit):
     def __init__(self, parent=None):
@@ -125,6 +133,7 @@ class MainWindow(QMainWindow):
         
         btn_layout = QHBoxLayout()
         self.btn_select_files = QPushButton("ファイルを選択")
+        self.btn_select_files.setObjectName("btn_select")
         self.btn_select_files.clicked.connect(self.select_files)
         # self.btn_select_folder = QPushButton("フォルダを選択")
         btn_layout.addWidget(self.btn_select_files)
@@ -144,6 +153,7 @@ class MainWindow(QMainWindow):
         self.out_dir_edit = DropLineEdit()
         self.out_dir_edit.setPlaceholderText("ドラッグ＆ドロップまたはボタンで選択")
         self.btn_out_dir = QPushButton("参照")
+        self.btn_out_dir.setObjectName("btn_out_dir")
         self.btn_out_dir.clicked.connect(self.select_out_dir)
         out_dir_layout.addWidget(self.out_dir_edit)
         out_dir_layout.addWidget(self.btn_out_dir)
@@ -190,7 +200,7 @@ class MainWindow(QMainWindow):
         model_layout = QVBoxLayout()
         
         self.lbl_gpu = QLabel("GPUチェック中...")
-        self.lbl_gpu.setStyleSheet("font-weight: bold; color: #e67e22;")
+        self.lbl_gpu.setStyleSheet("font-weight: bold; color: #ffcc00; margin-bottom: 5px;")
         
         mode_btn_layout = QHBoxLayout()
         self.mode_group = QButtonGroup(self)
@@ -212,6 +222,9 @@ class MainWindow(QMainWindow):
         model_group.setLayout(model_layout)
         main_layout.addWidget(model_group)
         
+        # --- Restore Settings ---
+        self.restore_settings()
+        
         # 4. Execution & Logs
         exec_layout = QHBoxLayout()
         self.btn_exec = QPushButton("文字起こし開始")
@@ -220,17 +233,56 @@ class MainWindow(QMainWindow):
         exec_layout.addWidget(self.btn_exec)
         
         self.progress_bar = QProgressBar()
+        self.progress_bar.setObjectName("current_progress")
         self.progress_bar.setValue(0)
+        
+        self.total_progress_bar = QProgressBar()
+        self.total_progress_bar.setObjectName("total_progress")
+        self.total_progress_bar.setValue(0)
         
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         
         main_layout.addLayout(exec_layout)
+        main_layout.addWidget(QLabel("現在のファイル:"))
         main_layout.addWidget(self.progress_bar)
+        main_layout.addWidget(QLabel("全体進捗:"))
+        main_layout.addWidget(self.total_progress_bar)
         main_layout.addWidget(QLabel("ログ:"))
         main_layout.addWidget(self.log_text)
         
         self.setCentralWidget(central_widget)
+
+    def restore_settings(self):
+        self.out_dir_edit.setText(settings.get('output_dir'))
+        formats = settings.get('formats')
+        self.chk_txt.setChecked('txt' in formats)
+        self.chk_srt.setChecked('srt' in formats)
+        self.chk_vtt.setChecked('vtt' in formats)
+        self.chk_time_txt.setChecked('timestamp_txt' in formats)
+        
+        lang = settings.get('lang')
+        if lang == 'en': self.rdo_en.setChecked(True)
+        else: self.rdo_ja.setChecked(True)
+        
+        self.chk_filler.setChecked(settings.get('enable_filler'))
+        self.chk_punc.setChecked(settings.get('enable_punc'))
+        
+        model = settings.get('model')
+        if model == 'large-v3': self.rdo_high.setChecked(True)
+        elif model == 'medium': self.rdo_light.setChecked(True)
+        else: self.rdo_turbo.setChecked(True)
+
+    def save_current_settings(self):
+        data = {
+            'output_dir': self.out_dir_edit.text(),
+            'formats': self.get_formats(),
+            'model': self.get_selected_mode(),
+            'lang': 'ja' if self.rdo_ja.isChecked() else 'en',
+            'enable_filler': self.chk_filler.isChecked(),
+            'enable_punc': self.chk_punc.isChecked()
+        }
+        settings.save(data)
 
     def setup_signals(self):
         gui_log_signal.log_msg.connect(self.append_log)
@@ -367,6 +419,7 @@ class MainWindow(QMainWindow):
         
         self.worker_thread = TranscriptionThread(self.files_to_process, out_dir, mode, formats, opts)
         self.worker_thread.progress_signal.connect(self.progress_bar.setValue)
+        self.worker_thread.total_progress_signal.connect(self.total_progress_bar.setValue)
         self.worker_thread.log_signal.connect(lambda m: logger.info(m))
         self.worker_thread.finished_signal.connect(self.on_processing_finished)
         self.worker_thread.start()
@@ -382,6 +435,7 @@ class MainWindow(QMainWindow):
             self.files_to_process = []
             self.file_label.setText("ファイルが選択されていません")
             self.progress_bar.setValue(0)
+            self.total_progress_bar.setValue(0)
         else:
             QMessageBox.warning(self, "エラー終了", f"処理が一部失敗またはキャンセルされました。\n{msg}")
 
@@ -399,3 +453,5 @@ class MainWindow(QMainWindow):
                 event.ignore()
         else:
             event.accept()
+        
+        self.save_current_settings()

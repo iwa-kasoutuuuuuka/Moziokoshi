@@ -36,8 +36,12 @@ def build():
         "--add-data", f"{filler_dict};.",
         "--add-data", "app_icon.png;.",
         "--add-data", "ui/styles.qss;ui/",
-        "--collect-data", "faster_whisper", # ensures whisper assets
+        "--collect-data", "faster_whisper",
         "--collect-data", "ctranslate2",
+        "--exclude-module", "torch",
+        "--exclude-module", "torchaudio",
+        "--exclude-module", "matplotlib",
+        "--exclude-module", "test",
         "main.py"
     ]
     

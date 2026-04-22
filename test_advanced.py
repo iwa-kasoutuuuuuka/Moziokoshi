@@ -1,6 +1,5 @@
 import os
-import gc
-import torch
+# import torch
 from core.transcriber import Transcriber
 from core.downloader import get_ffmpeg_path, get_app_dir
 
