@@ -15,6 +15,7 @@ class TranscriptionThread(QThread):
     progress_signal = Signal(int)
     total_progress_signal = Signal(int)
     log_signal = Signal(str)
+    segment_signal = Signal(str)
     file_finished_signal = Signal(int, int) # completed, total
     finished_signal = Signal(bool, str) # success, message
     
@@ -57,7 +58,9 @@ class TranscriptionThread(QThread):
                     lang='ja' if self.options['lang'] == 'ja' else 'en',
                     enable_filler=self.options['enable_filler'],
                     enable_punc=self.options['enable_punc'],
-                    progress_callback=progress_cb
+                    enable_replace=self.options['enable_replace'],
+                    progress_callback=progress_cb,
+                    segment_callback=self.segment_signal.emit
                 )
                 
                 if success:
@@ -182,10 +185,13 @@ class MainWindow(QMainWindow):
         lang_layout.addStretch()
         
         opt_layout = QHBoxLayout()
-        self.chk_filler = QCheckBox("フィラー除去 (えー、あのー 等)")
+        self.chk_filler = QCheckBox("フィラー除去")
         self.chk_punc = QCheckBox("句読点補正")
+        self.chk_replace = QCheckBox("単語置換 (辞書)")
+        self.chk_replace.setChecked(True)
         opt_layout.addWidget(self.chk_filler)
         opt_layout.addWidget(self.chk_punc)
+        opt_layout.addWidget(self.chk_replace)
         opt_layout.addStretch()
         
         output_layout.addLayout(out_dir_layout)
@@ -204,7 +210,7 @@ class MainWindow(QMainWindow):
         
         mode_btn_layout = QHBoxLayout()
         self.mode_group = QButtonGroup(self)
-        self.rdo_turbo = QRadioButton("Turbo (large-v3-turbo) - 推奨")
+        self.rdo_turbo = QRadioButton("Turbo (large-v3-turbo)")
         self.rdo_high = QRadioButton("高精度 (large-v3)")
         self.rdo_light = QRadioButton("軽量 (medium)")
         self.rdo_turbo.setChecked(True)
@@ -240,14 +246,22 @@ class MainWindow(QMainWindow):
         self.total_progress_bar.setObjectName("total_progress")
         self.total_progress_bar.setValue(0)
         
+        self.preview_text = QTextEdit()
+        self.preview_text.setReadOnly(True)
+        self.preview_text.setPlaceholderText("ここにリアルタイムでテキストが表示されます...")
+        self.preview_text.setObjectName("preview_pane")
+        
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
+        self.log_text.setMaximumHeight(100)
         
         main_layout.addLayout(exec_layout)
         main_layout.addWidget(QLabel("現在のファイル:"))
         main_layout.addWidget(self.progress_bar)
         main_layout.addWidget(QLabel("全体進捗:"))
         main_layout.addWidget(self.total_progress_bar)
+        main_layout.addWidget(QLabel("リアルタイムプレビュー:"))
+        main_layout.addWidget(self.preview_text, 1) # Give it stretch
         main_layout.addWidget(QLabel("ログ:"))
         main_layout.addWidget(self.log_text)
         
@@ -267,6 +281,7 @@ class MainWindow(QMainWindow):
         
         self.chk_filler.setChecked(settings.get('enable_filler'))
         self.chk_punc.setChecked(settings.get('enable_punc'))
+        self.chk_replace.setChecked(settings.get('enable_replace', True))
         
         model = settings.get('model')
         if model == 'large-v3': self.rdo_high.setChecked(True)
@@ -280,12 +295,19 @@ class MainWindow(QMainWindow):
             'model': self.get_selected_mode(),
             'lang': 'ja' if self.rdo_ja.isChecked() else 'en',
             'enable_filler': self.chk_filler.isChecked(),
-            'enable_punc': self.chk_punc.isChecked()
+            'enable_punc': self.chk_punc.isChecked(),
+            'enable_replace': self.chk_replace.isChecked()
         }
         settings.save(data)
 
     def setup_signals(self):
         gui_log_signal.log_msg.connect(self.append_log)
+
+    def append_preview(self, text):
+        self.preview_text.append(text)
+        # Scroll to bottom
+        scrollbar = self.preview_text.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
 
     def check_system(self):
         # 1. GPU Check
@@ -414,12 +436,15 @@ class MainWindow(QMainWindow):
         opts = {
             'lang': 'ja' if self.rdo_ja.isChecked() else 'en',
             'enable_filler': self.chk_filler.isChecked(),
-            'enable_punc': self.chk_punc.isChecked()
+            'enable_punc': self.chk_punc.isChecked(),
+            'enable_replace': self.chk_replace.isChecked()
         }
         
+        self.preview_text.clear() # Clear for new batch
         self.worker_thread = TranscriptionThread(self.files_to_process, out_dir, mode, formats, opts)
         self.worker_thread.progress_signal.connect(self.progress_bar.setValue)
         self.worker_thread.total_progress_signal.connect(self.total_progress_bar.setValue)
+        self.worker_thread.segment_signal.connect(self.append_preview)
         self.worker_thread.log_signal.connect(lambda m: logger.info(m))
         self.worker_thread.finished_signal.connect(self.on_processing_finished)
         self.worker_thread.start()

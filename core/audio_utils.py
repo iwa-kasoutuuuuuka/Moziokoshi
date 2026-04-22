@@ -2,7 +2,20 @@ import os
 import subprocess
 import math
 import numpy as np
+from numba import njit, prange
 from utils.logger import logger
+
+@njit(parallel=True, fastmath=True)
+def fast_normalize_audio(raw_audio):
+    """
+    Numbaを使用してSIMD命令（AVX2等）レベルにコンパイルされる高速正規化関数。
+    """
+    n = len(raw_audio)
+    output = np.empty(n, dtype=np.float32)
+    inv_max = 1.0 / 32768.0
+    for i in prange(n):
+        output[i] = raw_audio[i] * inv_max
+    return output
 
 def get_audio_duration(file_path, ffmpeg_path="ffmpeg"):
     """使用するffprobeでメディアの長さを取得します"""
@@ -59,9 +72,9 @@ def load_audio_to_numpy(file_path, ffmpeg_path="ffmpeg", sr=16000):
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, startupinfo=startupinfo)
         out, _ = process.communicate()
         
-        # Convert buffer to float32 (Whisper expects normalized float32 or int16)
-        # faster-whisper can take float32 array in range [-1, 1]
-        audio = np.frombuffer(out, dtype=np.int16).astype(np.float32) / 32768.0
+        # Convert buffer using Numba-accelerated function (C/Assembly level speed)
+        raw_int16 = np.frombuffer(out, dtype=np.int16)
+        audio = fast_normalize_audio(raw_int16)
         return audio
     except Exception as e:
         logger.error(f"Failed to load audio in-memory: {e}")

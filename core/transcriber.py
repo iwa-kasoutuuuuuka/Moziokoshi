@@ -1,5 +1,6 @@
 import os
 import gc
+from numba import njit
 # import torch  <-- Remove this to save ~2GB in build
 from faster_whisper import WhisperModel
 from core.audio_utils import get_audio_chunks, cleanup_chunks
@@ -27,16 +28,32 @@ def get_gpu_info():
         
     return False, 0.0, False
 
+@njit(fastmath=True)
+def _format_time_numba(seconds):
+    """
+    時間計算をマシンコードで行う内部関数。
+    """
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int(round((seconds - int(seconds)) * 1000))
+    if ms >= 1000: # Rounding overflow
+        ms = 0
+        s += 1
+        if s >= 60:
+            s = 0
+            m += 1
+            if m >= 60:
+                m = 0
+                h += 1
+    return h, m, s, ms
+
 def format_timestamp(seconds: float, separator: str = ","):
     """
-    >>> format_timestamp(1234.567)
-    '00:20:34,567'
+    Numbaで高速化された時間計算を利用した整形。
     """
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    seconds_int = int(seconds % 60)
-    milliseconds = int(round((seconds - int(seconds)) * 1000))
-    return f"{hours:02d}:{minutes:02d}:{seconds_int:02d}{separator}{milliseconds:03d}"
+    h, m, s, ms = _format_time_numba(seconds)
+    return f"{h:02d}:{m:02d}:{s:02d}{separator}{ms:03d}"
 
 class Transcriber:
     def __init__(self, mode, model_dir, app_dir, ffmpeg_path):
@@ -72,7 +89,8 @@ class Transcriber:
         self.model = WhisperModel(self.mode, device=device, compute_type=compute_type, download_root=self.model_dir)
         logger.info("Model loaded successfully.")
 
-    def transcribe_file(self, file_path, output_dir, formats, lang='ja', enable_filler=False, enable_punc=False, progress_callback=None):
+    def transcribe_file(self, file_path, output_dir, formats, lang='ja', enable_filler=False, enable_punc=False, 
+                       enable_replace=True, progress_callback=None, segment_callback=None):
         logger.info(f"Starting transcription for: {file_path}")
         
         chunks = get_audio_chunks(file_path, self.ffmpeg_path)
@@ -103,6 +121,9 @@ class Transcriber:
                         "text": text
                     }
                     all_segments.append(adjusted_segment)
+                    
+                    if segment_callback:
+                        segment_callback(text)
                     
                 if progress_callback:
                     progress_callback(int((i + 1) / total_chunks * 100))
