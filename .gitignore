@@ -22,6 +22,7 @@ log.txt
 *.wav
 *.mp3
 *.mp4
+*.zip
 
 # IDEs
 .vscode/
