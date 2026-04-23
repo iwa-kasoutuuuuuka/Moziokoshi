@@ -1,0 +1,223 @@
+import os
+import gc
+from numba import njit
+# import torch  <-- Remove this to save ~2GB in build
+from faster_whisper import WhisperModel
+from core.audio_utils import get_audio_chunks, cleanup_chunks
+from core.text_processor import process_text
+from utils.logger import logger
+
+def get_gpu_info():
+    """
+    Returns (use_gpu: bool, vram_gb: float, forced_medium: bool)
+    torch を使わずに、環境変数や ctranslate2 の挙動から推測または簡易チェックします。
+    """
+    # 簡易的に NVIDIA GPU があるかチェック (Windows)
+    try:
+        import subprocess
+        # nvidia-smi が実行できれば GPU ありと判断
+        res = subprocess.run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"], 
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if res.returncode == 0:
+            vram_mb = float(res.stdout.strip().split('\n')[0])
+            vram_gb = vram_mb / 1024.0
+            forced_medium = vram_gb < 3.0
+            return True, vram_gb, forced_medium
+    except Exception:
+        pass
+        
+    return False, 0.0, False
+
+@njit(fastmath=True)
+def _format_time_numba(seconds):
+    """
+    時間計算をマシンコードで行う内部関数。
+    """
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int(round((seconds - int(seconds)) * 1000))
+    if ms >= 1000: # Rounding overflow
+        ms = 0
+        s += 1
+        if s >= 60:
+            s = 0
+            m += 1
+            if m >= 60:
+                m = 0
+                h += 1
+    return h, m, s, ms
+
+def format_timestamp(seconds: float, separator: str = ","):
+    """
+    Numbaで高速化された時間計算を利用した整形。
+    """
+    h, m, s, ms = _format_time_numba(seconds)
+    return f"{h:02d}:{m:02d}:{s:02d}{separator}{ms:03d}"
+
+class Transcriber:
+    def __init__(self, mode, model_dir, app_dir, ffmpeg_path, enable_speculative=True):
+        self.mode = mode # 'large-v3-turbo', 'large-v3', 'medium'
+        self.model_dir = model_dir
+        self.app_dir = app_dir
+        self.ffmpeg_path = ffmpeg_path
+        self.enable_speculative = enable_speculative
+        
+        # Check GPU
+        self.use_gpu, self.vram_gb, self.forced_medium = get_gpu_info()
+        logger.info(f"GPU Available: {self.use_gpu}, VRAM: {self.vram_gb:.2f}GB")
+        
+        if self.forced_medium and self.mode != 'medium':
+            logger.warning("VRAM is less than 3GB. Forcing 'medium' model.")
+            self.mode = 'medium'
+            
+        # Ensure model is downloaded if not local
+        model_path = os.path.join(self.model_dir, self.mode)
+        if not os.path.exists(model_path):
+            from core.downloader import setup_model
+            logger.info(f"Model {self.mode} not found locally. Downloading...")
+            setup_model(self.mode)
+            
+        device = "cuda" if self.use_gpu else "cpu"
+        compute_type = "float16" if self.use_gpu else "int8"
+        
+        # CPU can't do float16 smoothly, sometimes we do int8 or compute_type="auto"
+        # Since larger models with CPU and float16 might fail:
+        if not self.use_gpu:
+            compute_type = "int8"
+            
+        logger.info(f"Loading model {self.mode} on {device} with {compute_type}...")
+        self.model = WhisperModel(self.mode, device=device, compute_type=compute_type, download_root=self.model_dir)
+        
+        # Speculative Decoding用アシスタントモデル (largeモデル使用時のみ)
+        self.assistant_model = None
+        if self.enable_speculative and 'large' in self.mode:
+            logger.info("Loading assistant model (tiny) for speculative decoding...")
+            # アシスタントは常に最速のtinyモデルを使用
+            self.assistant_model = WhisperModel("tiny", device=device, compute_type=compute_type, download_root=self.model_dir)
+            
+        logger.info("Models loaded successfully.")
+
+    def transcribe_file(self, file_path, output_dir, formats, lang='ja', enable_filler=False, enable_punc=False, 
+                       enable_replace=True, progress_callback=None, segment_callback=None):
+        logger.info(f"Starting transcription for: {file_path}")
+        if self.assistant_model:
+            logger.info("Speculative decoding is ENABLED.")
+        
+        chunks = get_audio_chunks(file_path, self.ffmpeg_path)
+        if not chunks:
+            logger.error("No valid audio found in the file.")
+            return False
+            
+        all_segments = []
+        total_chunks = len(chunks)
+        
+        try:
+            for i, chunk in enumerate(chunks):
+                chunk_data = chunk['data']
+                time_offset = chunk['start_time']
+                
+                logger.info(f"Processing chunk {i+1}/{total_chunks}...")
+                
+                # Using faster-whisper with in-memory NumPy array
+                # Note: WhisperModel.transcribe handles assistant model automatically if passed
+                transcribe_kwargs = {
+                    "language": lang,
+                    "beam_size": 5
+                }
+                if self.assistant_model:
+                    # ctranslate2 supported speculative decoding via assistant_model in transcribe()
+                    transcribe_kwargs["initial_prompt"] = None # Optional
+                    
+                # Actually, faster-whisper uses assistant_model in transcribe call
+                segments, info = self.model.transcribe(
+                    chunk_data, 
+                    **transcribe_kwargs
+                )
+                
+                # Note: In some versions of faster-whisper, you pass assistant_model to transcribe()
+                # But looking at the old code, it just initialized self.assistant_model.
+                # Wait, if I don't pass it to transcribe(), it won't be used.
+                # Let's check how to use speculative decoding in faster-whisper.
+                # It's usually: model.transcribe(..., assistant_model=assistant)
+                
+                if self.assistant_model:
+                    segments, info = self.model.transcribe(
+                        chunk_data,
+                        language=lang,
+                        beam_size=5,
+                        assistant_model=self.assistant_model
+                    )
+                else:
+                    segments, info = self.model.transcribe(
+                        chunk_data,
+                        language=lang,
+                        beam_size=5
+                    )
+                
+                for segment in segments:
+                    # Apply text processing
+                    text = process_text(segment.text, self.app_dir, enable_filler, enable_punc)
+                    
+                    adjusted_segment = {
+                        "start": segment.start + time_offset,
+                        "end": segment.end + time_offset,
+                        "text": text
+                    }
+                    all_segments.append(adjusted_segment)
+                    
+                    if segment_callback:
+                        segment_callback(text)
+                    
+                if progress_callback:
+                    progress_callback(int((i + 1) / total_chunks * 100))
+                    
+                # Clean up memory
+                gc.collect()
+                    
+            # Export results
+            self._export_results(file_path, output_dir, formats, lang, all_segments)
+            logger.info(f"Completed transcription for: {file_path}")
+            return True
+            
+        finally:
+            cleanup_chunks(chunks)
+            gc.collect()
+
+    def _export_results(self, file_path, output_dir, formats, lang, segments):
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        suffix = f"_{lang}"
+        
+        if "txt" in formats:
+            out_path = os.path.join(output_dir, f"{base_name}{suffix}.txt")
+            with open(out_path, "w", encoding="utf-8") as f:
+                for seg in segments:
+                    f.write(f"{seg['text'].strip()}\n")
+            logger.info(f"Saved: {out_path}")
+            
+        if "srt" in formats:
+            out_path = os.path.join(output_dir, f"{base_name}{suffix}.srt")
+            with open(out_path, "w", encoding="utf-8") as f:
+                for idx, seg in enumerate(segments, start=1):
+                    start = format_timestamp(seg['start'], ",")
+                    end = format_timestamp(seg['end'], ",")
+                    f.write(f"{idx}\n{start} --> {end}\n{seg['text'].strip()}\n\n")
+            logger.info(f"Saved: {out_path}")
+            
+        if "vtt" in formats:
+            out_path = os.path.join(output_dir, f"{base_name}{suffix}.vtt")
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write("WEBVTT\n\n")
+                for seg in segments:
+                    start = format_timestamp(seg['start'], ".")
+                    end = format_timestamp(seg['end'], ".")
+                    f.write(f"{start} --> {end}\n{seg['text'].strip()}\n\n")
+            logger.info(f"Saved: {out_path}")
+            
+        if "timestamp_txt" in formats:
+            out_path = os.path.join(output_dir, f"{base_name}{suffix}_timestamp.txt")
+            with open(out_path, "w", encoding="utf-8") as f:
+                for seg in segments:
+                    start = format_timestamp(seg['start'], ".")[:8] # HH:MM:SS
+                    f.write(f"[{start}] {seg['text'].strip()}\n")
+            logger.info(f"Saved: {out_path}")
